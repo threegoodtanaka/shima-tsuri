@@ -12,6 +12,8 @@ const METHOD_COLORS: Record<string, string> = {
   中深海: "bg-indigo-100 text-indigo-700",
   バチコン: "bg-yellow-100 text-yellow-700",
   ロックフィッシュ: "bg-emerald-100 text-emerald-700",
+  トラフグ: "bg-amber-100 text-amber-700",
+  プラスク: "bg-cyan-100 text-cyan-700",
 };
 
 interface ReportCardProps {

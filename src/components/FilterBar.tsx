@@ -13,6 +13,8 @@ const METHODS = [
   "中深海",
   "バチコン",
   "ロックフィッシュ",
+  "トラフグ",
+  "プラスク",
 ] as const;
 
 const AREAS = [
