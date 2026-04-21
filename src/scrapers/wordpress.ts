@@ -6,15 +6,100 @@ const MAX_ARTICLES = 5;
 
 /**
  * WordPress ベースのブログをスクレイプする。
- * 一般的なWPテーマのHTML構造に対応。
+ * 優先順: RSS feed → HTML fallback
  */
 export async function scrapeWordpress(blogUrl: string): Promise<ScrapedArticle[]> {
-  console.log(`[wordpress] Fetching: ${blogUrl}`);
-  const html = await fetchHTML(blogUrl);
-  const $ = cheerio.load(html);
   const baseUrl = new URL(blogUrl).origin;
 
-  // 記事リンクを探す（WP共通パターン）
+  // 1. RSS feedを試みる（WordPress標準: /feed/）
+  const rssUrls = [
+    `${baseUrl}/feed/`,
+    `${blogUrl.replace(/\/$/, "")}/feed/`,
+  ];
+
+  for (const rssUrl of rssUrls) {
+    try {
+      console.log(`[wordpress] Trying RSS: ${rssUrl}`);
+      const articles = await scrapeFromRss(rssUrl, baseUrl);
+      if (articles.length > 0) {
+        console.log(`[wordpress] RSS success: ${articles.length} articles`);
+        return articles;
+      }
+    } catch (err) {
+      console.log(`[wordpress] RSS failed: ${err}`);
+    }
+  }
+
+  // 2. HTML fallback
+  console.log(`[wordpress] Falling back to HTML scraping: ${blogUrl}`);
+  return scrapeFromHtml(blogUrl, baseUrl);
+}
+
+/**
+ * RSS feedからスクレイプ
+ */
+async function scrapeFromRss(rssUrl: string, baseUrl: string): Promise<ScrapedArticle[]> {
+  const response = await fetch(rssUrl, {
+    headers: { "User-Agent": "ShimaTsuriBot/1.0" },
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!response.ok) throw new Error(`RSS fetch failed: ${response.status}`);
+
+  const xml = await response.text();
+  const articles: ScrapedArticle[] = [];
+
+  // XMLをRegexで簡易パース（サロゲート文字などでXMLパーサーが落ちるため）
+  const items = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+
+  for (const item of items.slice(0, MAX_ARTICLES)) {
+    const titleMatch = item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
+                       item.match(/<title>(.*?)<\/title>/);
+    const linkMatch = item.match(/<link>(.*?)<\/link>/);
+    const pubDateMatch = item.match(/<pubDate>(.*?)<\/pubDate>/);
+
+    // description（要約）またはcontent:encoded（全文）
+    const contentMatch = item.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/);
+    const descMatch = item.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) ||
+                      item.match(/<description>([\s\S]*?)<\/description>/);
+
+    const title = titleMatch ? cleanHtmlEntities(titleMatch[1]) : "";
+    const link = linkMatch ? linkMatch[1].trim() : "";
+    const rawHtml = contentMatch ? contentMatch[1] : (descMatch ? descMatch[1] : "");
+
+    // HTMLタグを除去してテキスト化
+    const text = cleanText(rawHtml.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#\d+;/g, ""));
+
+    // 画像URL抽出
+    const images = extractImagesFromHtml(rawHtml, baseUrl);
+
+    // 日付パース
+    let date = "";
+    if (pubDateMatch) {
+      try {
+        const d = new Date(pubDateMatch[1]);
+        if (!isNaN(d.getTime())) {
+          date = d.toISOString().slice(0, 10);
+        }
+      } catch { /* ignore */ }
+    }
+    if (!date) date = extractDateFromUrl(link) || "";
+
+    if (link && text.length > 10) {
+      articles.push({ url: link, title, text: text.slice(0, 5000), images, date });
+    }
+  }
+
+  return articles;
+}
+
+/**
+ * HTML fallback（RSS が無いサイト用）
+ */
+async function scrapeFromHtml(blogUrl: string, baseUrl: string): Promise<ScrapedArticle[]> {
+  const html = await fetchHTML(blogUrl);
+  const $ = cheerio.load(html);
+
   const articleLinks: string[] = [];
   const selectors = [
     "a.p-postList__link",
@@ -26,10 +111,6 @@ export async function scrapeWordpress(blogUrl: string): Promise<ScrapedArticle[]
     ".post-title a",
     ".blog-entry-title a",
     ".article-title a",
-    "h3.entry-title a",
-    ".skin-entryTitle a",
-    ".entry-card-title a",
-    ".post a[href]",
   ];
 
   for (const sel of selectors) {
@@ -45,167 +126,90 @@ export async function scrapeWordpress(blogUrl: string): Promise<ScrapedArticle[]
     if (articleLinks.length >= MAX_ARTICLES) break;
   }
 
-  // セレクタで見つからなかった場合、<a>タグから記事っぽいURLを拾う
-  if (articleLinks.length === 0) {
-    $("a[href]").each((_i, el) => {
-      const href = $(el).attr("href");
-      if (href && isArticleUrl(href, baseUrl)) {
-        const resolved = resolveUrl(href, baseUrl);
-        if (resolved && !articleLinks.includes(resolved)) {
-          articleLinks.push(resolved);
-        }
-      }
-    });
-  }
-
-  const uniqueLinks = articleLinks.slice(0, MAX_ARTICLES);
-  console.log(`[wordpress] Found ${uniqueLinks.length} article links`);
-
   const articles: ScrapedArticle[] = [];
-
-  for (const link of uniqueLinks) {
+  for (const link of articleLinks.slice(0, MAX_ARTICLES)) {
     try {
-      const article = await scrapeWpArticle(link);
-      if (article) {
-        articles.push(article);
-      }
+      const article = await scrapeWpArticle(link, baseUrl);
+      if (article) articles.push(article);
     } catch (err) {
-      console.log(`[wordpress] Failed to scrape article ${link}: ${err}`);
+      console.log(`[wordpress] Failed to scrape ${link}: ${err}`);
     }
   }
 
   return articles;
 }
 
-async function scrapeWpArticle(url: string): Promise<ScrapedArticle | null> {
-  console.log(`[wordpress] Scraping article: ${url}`);
+async function scrapeWpArticle(url: string, baseUrl: string): Promise<ScrapedArticle | null> {
   const html = await fetchHTML(url);
   const $ = cheerio.load(html);
 
-  // タイトル抽出
   const title =
     cleanText($(".entry-title").first().text()) ||
-    cleanText($("h1.post-title").first().text()) ||
     cleanText($("h1").first().text()) ||
-    cleanText($("title").text()) ||
-    "";
+    cleanText($("title").text()) || "";
 
-  // 本文抽出
   const bodySelectors = [
-    ".post_content",
-    ".e-content",
-    ".entry-content",
-    ".post-content",
-    ".article-content",
-    ".blog-entry-content",
-    "article .content",
-    ".swell-block-fullWide__content",
-    "article",
-    ".post-body",
-    ".the-content",
-    "#content",
+    ".post_content", ".e-content", ".entry-content", ".post-content",
+    ".article-content", "article", ".post-body", ".the-content",
   ];
 
   let bodyText = "";
   for (const sel of bodySelectors) {
     const text = cleanText($(sel).first().text());
-    if (text && text.length > 50) {
-      bodyText = text;
-      break;
-    }
+    if (text && text.length > 50) { bodyText = text; break; }
   }
 
-  if (!bodyText) {
-    console.log(`[wordpress] No body text found for ${url}`);
-    return null;
-  }
+  if (!bodyText) return null;
 
-  // 画像抽出
-  let imagesHtml = "";
-  for (const sel of bodySelectors) {
-    const el = $(sel).first();
-    if (el.length) {
-      imagesHtml = el.html() || "";
-      break;
-    }
-  }
-  const images = extractImages(imagesHtml || html, url);
-
-  // 日付抽出
+  const images = extractImages(html, url);
   const dateStr =
     $("time[datetime]").first().attr("datetime") ||
-    $(".entry-date").first().text() ||
-    $(".post-date").first().text() ||
-    $('meta[property="article:published_time"]').attr("content") ||
-    "";
+    $('meta[property="article:published_time"]').attr("content") || "";
   const date = parseJapaneseDate(dateStr) || extractDateFromUrl(url) || "";
 
-  return {
-    url,
-    title,
-    text: bodyText.slice(0, 5000), // Limit text length for Claude API
-    images,
-    date,
-  };
+  return { url, title, text: bodyText.slice(0, 5000), images, date };
 }
 
-/**
- * URLが記事リンクかどうか判定する
- */
 function isArticleUrl(href: string, baseUrl: string): boolean {
-  // Skip common non-article links
   if (!href || href === "#" || href.startsWith("javascript:")) return false;
-  if (href.includes("/category/") || href.includes("/tag/") || href.includes("/page/"))
-    return false;
-  if (href.includes("/wp-content/") || href.includes("/wp-admin/")) return false;
-  if (href.endsWith(".jpg") || href.endsWith(".png") || href.endsWith(".pdf")) return false;
-
-  // Must be same origin or relative
+  if (/\/(category|tag|page|wp-content|wp-admin)\//.test(href)) return false;
+  if (/\.(jpg|png|pdf)$/.test(href)) return false;
   try {
     const resolved = new URL(href, baseUrl);
-    const base = new URL(baseUrl);
-    if (resolved.hostname !== base.hostname) return false;
-  } catch {
-    return false;
-  }
-
-  // Looks like a blog post URL (has date, or has a slug)
-  if (/\/\d{4}\/\d{2}\//.test(href)) return true;
-  if (/\/\d{4}-\d{2}-\d{2}/.test(href)) return true;
+    if (resolved.hostname !== new URL(baseUrl).hostname) return false;
+  } catch { return false; }
+  if (/\/\d{4}[\/-]\d{2}[\/-]\d{2}/.test(href)) return true;
   if (/\/archives\/\d+/.test(href)) return true;
-  if (/\/blog\//.test(href) && href.split("/").filter(Boolean).length > 2) return true;
   if (/\?p=\d+/.test(href)) return true;
-  if (/\/entry-\d+/.test(href)) return true;
-  if (/\/post-\d+/.test(href)) return true;
-
-  // Path has more than just / — could be a post slug
-  try {
-    const pathname = new URL(href, baseUrl).pathname;
-    const segments = pathname.split("/").filter(Boolean);
-    if (segments.length >= 1 && !["blog", "about", "contact", "privacy"].includes(segments[0])) {
-      return true;
-    }
-  } catch {
-    // skip
-  }
-
   return false;
 }
 
 function resolveUrl(href: string, baseUrl: string): string | null {
-  try {
-    return new URL(href, baseUrl).href;
-  } catch {
-    return null;
-  }
+  try { return new URL(href, baseUrl).href; } catch { return null; }
 }
 
 function extractDateFromUrl(url: string): string | null {
-  // /2026/04/13/ pattern
-  const match1 = url.match(/(\d{4})\/(\d{2})\/(\d{2})/);
-  if (match1) return `${match1[1]}-${match1[2]}-${match1[3]}`;
-  // /2026-04-13-xxx/ pattern
-  const match2 = url.match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (match2) return `${match2[1]}-${match2[2]}-${match2[3]}`;
+  const m1 = url.match(/(\d{4})\/(\d{2})\/(\d{2})/);
+  if (m1) return `${m1[1]}-${m1[2]}-${m1[3]}`;
+  const m2 = url.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m2) return `${m2[1]}-${m2[2]}-${m2[3]}`;
   return null;
+}
+
+function extractImagesFromHtml(html: string, baseUrl: string): string[] {
+  const imgs: string[] = [];
+  const matches = html.matchAll(/<img[^>]+src=["']([^"']+)["']/g);
+  for (const m of matches) {
+    const src = m[1];
+    if (src.startsWith("data:") || src.includes("gravatar") || src.includes("emoji")) continue;
+    try {
+      imgs.push(new URL(src, baseUrl).href);
+    } catch { /* skip */ }
+    if (imgs.length >= 5) break;
+  }
+  return imgs;
+}
+
+function cleanHtmlEntities(text: string): string {
+  return text.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n)));
 }
