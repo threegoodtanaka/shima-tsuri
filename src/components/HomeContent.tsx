@@ -87,7 +87,7 @@ export default function HomeContent() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3 lg:grid-cols-2">
           {reports.map((r) => (
             <ReportCard
               key={r.id}
