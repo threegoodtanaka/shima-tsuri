@@ -47,6 +47,12 @@ export async function structurizeReport(
     throw new Error("Unexpected response type from Claude API");
   }
 
-  const parsed: StructuredReport = JSON.parse(content.text);
+  // マークダウンコードブロックを除去
+  let jsonText = content.text.trim();
+  if (jsonText.startsWith("```")) {
+    jsonText = jsonText.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+  }
+
+  const parsed: StructuredReport = JSON.parse(jsonText);
   return parsed;
 }

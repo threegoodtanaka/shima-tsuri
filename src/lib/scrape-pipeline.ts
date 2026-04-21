@@ -45,8 +45,8 @@ export async function runScrapeForBoat(
           newReports++;
         } else if (result === "skipped") {
           // already exists
-        } else if (result === "invalid") {
-          errors.push(`${article.url}: validation failed`);
+        } else if (typeof result === "object" && result.status === "invalid") {
+          errors.push(`${article.url}: validation failed: ${result.reasons}`);
         } else if (result === "not_report") {
           // expected, not an error
         }
@@ -83,7 +83,7 @@ async function processArticle(
   supabase: ReturnType<typeof getServiceSupabase>,
   boat: Boat,
   article: ScrapedArticle
-): Promise<"new" | "skipped" | "invalid" | "not_report"> {
+): Promise<"new" | "skipped" | "not_report" | { status: "invalid"; reasons: string }> {
   // 重複チェック
   const { data: existing } = await supabase
     .from("reports")
@@ -116,10 +116,9 @@ async function processArticle(
   // バリデーション
   const validation = validateReport(structured);
   if (!validation.valid) {
-    console.log(
-      `[pipeline] Validation failed for ${article.url}: ${validation.errors.join(", ")}`
-    );
-    return "invalid";
+    const reasons = validation.errors.join(", ");
+    console.log(`[pipeline] Validation failed for ${article.url}: ${reasons}`);
+    return { status: "invalid", reasons };
   }
 
   // 日付: 構造化結果 > 記事日付 > 今日
