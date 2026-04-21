@@ -17,6 +17,8 @@ export async function scrapeWordpress(blogUrl: string): Promise<ScrapedArticle[]
   // 記事リンクを探す（WP共通パターン）
   const articleLinks: string[] = [];
   const selectors = [
+    "a.p-postList__link",
+    ".p-postList__title a",
     ".entry-title a",
     "h2.post-title a",
     "h2 a",
@@ -90,11 +92,14 @@ async function scrapeWpArticle(url: string): Promise<ScrapedArticle | null> {
 
   // 本文抽出
   const bodySelectors = [
+    ".post_content",
+    ".e-content",
     ".entry-content",
     ".post-content",
     ".article-content",
     ".blog-entry-content",
     "article .content",
+    ".swell-block-fullWide__content",
     "article",
     ".post-body",
     ".the-content",
@@ -166,6 +171,7 @@ function isArticleUrl(href: string, baseUrl: string): boolean {
 
   // Looks like a blog post URL (has date, or has a slug)
   if (/\/\d{4}\/\d{2}\//.test(href)) return true;
+  if (/\/\d{4}-\d{2}-\d{2}/.test(href)) return true;
   if (/\/archives\/\d+/.test(href)) return true;
   if (/\/blog\//.test(href) && href.split("/").filter(Boolean).length > 2) return true;
   if (/\?p=\d+/.test(href)) return true;
@@ -195,9 +201,11 @@ function resolveUrl(href: string, baseUrl: string): string | null {
 }
 
 function extractDateFromUrl(url: string): string | null {
-  const match = url.match(/(\d{4})\/(\d{2})\/(\d{2})/);
-  if (match) {
-    return `${match[1]}-${match[2]}-${match[3]}`;
-  }
+  // /2026/04/13/ pattern
+  const match1 = url.match(/(\d{4})\/(\d{2})\/(\d{2})/);
+  if (match1) return `${match1[1]}-${match1[2]}-${match1[3]}`;
+  // /2026-04-13-xxx/ pattern
+  const match2 = url.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (match2) return `${match2[1]}-${match2[2]}-${match2[3]}`;
   return null;
 }
