@@ -125,9 +125,12 @@ async function processArticle(
     return { status: "invalid", reasons };
   }
 
-  // 日付: 構造化結果 > 記事日付 > 今日
-  const publishedAt =
-    structured.date || article.date || new Date().toISOString().slice(0, 10);
+  // 日付: Claude構造化結果 > 記事スクレイプ日付（今日の日付はフォールバックに使わない）
+  const publishedAt = structured.date || article.date || null;
+  if (!publishedAt) {
+    console.log(`[pipeline] No date found for ${article.url}, skipping`);
+    return "not_report";
+  }
 
   // DB保存
   const { error: insertError } = await supabase.from("reports").insert({

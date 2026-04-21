@@ -112,14 +112,28 @@ async function scrapeAmebloEntry(url: string): Promise<ScrapedArticle | null> {
   // 画像
   const images = extractImages(bodyHtml || html, url);
 
-  // 日付
+  // 日付（複数のソースから探す）
   const dateStr =
     $("time[datetime]").first().attr("datetime") ||
+    $('meta[property="article:published_time"]').attr("content") ||
+    $('meta[property="og:updated_time"]').attr("content") ||
     $(".skin-entryPubdate").first().text() ||
     $(".articleDate").first().text() ||
     $(".entry-date").first().text() ||
     "";
-  const date = parseJapaneseDate(dateStr) || "";
+  let date = parseJapaneseDate(dateStr) || "";
+
+  // HTMLからISO日付を直接探す（Ameblo独自のデータ属性）
+  if (!date) {
+    const htmlStr = $.html();
+    const isoMatch = htmlStr.match(/"datePublished"\s*:\s*"(\d{4}-\d{2}-\d{2})/);
+    if (isoMatch) date = isoMatch[1];
+  }
+  if (!date) {
+    const htmlStr = $.html();
+    const metaMatch = htmlStr.match(/entry_created_datetime.*?(\d{4}-\d{2}-\d{2})/);
+    if (metaMatch) date = metaMatch[1];
+  }
 
   return {
     url,
