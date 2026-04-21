@@ -48,10 +48,8 @@ export function validateReport(report: StructuredReport): {
     }
   }
 
-  // fish 配列チェック
-  if (!report.fish || report.fish.length === 0) {
-    errors.push("fish 配列が空です");
-  } else {
+  // fish 配列チェック（空でもOK: ボウズの日もある）
+  if (report.fish && report.fish.length > 0) {
     for (const f of report.fish) {
       if (f.count < 0 || f.count > 9999) {
         errors.push(`fish "${f.name}" の count(${f.count}) が範囲外です (0-9999)`);
