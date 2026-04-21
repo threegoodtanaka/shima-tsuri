@@ -102,9 +102,13 @@ async function processArticle(
     return "not_report";
   }
 
-  // Claude API で構造化
+  // Claude API で構造化（タイトル・URL・日付もメタ情報として渡す）
   console.log(`[pipeline] Structurizing: ${article.url}`);
-  const structured = await structurizeReport(article.text);
+  const structured = await structurizeReport(article.text, {
+    title: article.title,
+    url: article.url,
+    date: article.date,
+  });
   console.log(`[pipeline] Structured result: status=${structured.status}, confidence=${structured.confidence}`);
 
   // キャンセルや非レポートはスキップ
