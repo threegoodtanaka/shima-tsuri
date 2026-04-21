@@ -44,11 +44,12 @@ export default function ReportCard({
     <div className="group overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm transition-shadow hover:shadow-md">
       {/* サムネイル */}
       {photos.length > 0 && (
-        <div className="relative h-44 w-full overflow-hidden bg-gray-100">
+        <div className="relative h-32 w-full overflow-hidden bg-gray-100">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={photos[0]}
             alt={`${boatName}の釣果`}
+            loading="lazy"
             className="h-full w-full object-cover transition-transform group-hover:scale-105"
           />
           {photoCount > 1 && (
